@@ -9,7 +9,7 @@ import random
 import matplotlib.pyplot as plt
 import numpy as np
 from argparse import Namespace
-
+from PIL import Image
 import gymnasium as gym
 
 EKOX(gym.__version__)
@@ -24,12 +24,21 @@ parser.add_argument("--train", action="store_true", default=False)
 args = parser.parse_args()
 
 
+# Open the image form working directory
+image = np.asarray(Image.open('bw.png'))
+
+EKOX(np.mean(image))
+EKOX(image.shape)
 
 CP = False
     
 
 
-D = 100
+D, _ = image.shape
+
+
+
+
 ground = np.zeros((D, D))
 class CustomEnv(gym.Env) :
     def __init__(self) :
@@ -38,10 +47,19 @@ class CustomEnv(gym.Env) :
         self.action_space = Namespace(**{ "n" : 4})
         self.s = 0
     def reset(self) :
-
+        self.pp = np.ones((D,D,3))
+        self.pp[:,:,0] = image
         self.state = np.asarray((D//2, D//2))
         self.s = 0
         return [self.state]
+
+    def display(self) :
+        plt.imshow(self.pp); plt.show()
+
+    def paint(self) :
+        s = self.state        
+        self.pp[s[0], s[1], 1:] = (0.5, 0.5)
+        
     def step(self, action) :
         self.s += 1
         v = {
@@ -57,6 +75,13 @@ class CustomEnv(gym.Env) :
         reward = float(D - np.sqrt((s[0] ** 2 + s[1] **2)))
         truncated = self.s > D*2
         terminated = next_state[0] == 0 and next_state[1] == 0
+
+        terminated |= image[s[0], s[1]] == 0
+        terminated |= s[0] > D
+        terminated |= s[0] < 0
+        terminated |= s[1] > D
+        terminated |= s[1] < 0
+        #EKOX(image[s[0], s[1]])
         return next_state, reward, truncated, terminated, None
 
 class PreProcessEnv(gym.Wrapper):
@@ -82,10 +107,10 @@ class PreProcessEnv(gym.Wrapper):
     
 
 if CP :
-    env = gym.make("CartPole-v1")
+    env1 = gym.make("CartPole-v1")
 else :
-    env = CustomEnv()    
-env = PreProcessEnv(env)
+    env1 = CustomEnv()    
+env = PreProcessEnv(env1)
 
 class DQNetworkModel(nn.Module):
     def __init__(self, in_channels, out_classes):
@@ -199,7 +224,7 @@ if CP :
 if args.train :
     d = dqn_training(q_network, policy, 100)
     EKOX(len(d["MSE Loss"]))
-    plt.plot(d["MSE Loss"]); plt.show()
+    #plt.plot(d["MSE Loss"]); plt.show()
     torch.save(q_network.state_dict(), 'qlearing.cpt')
 else : 
     q_network.load_state_dict(torch.load('qlearing.cpt', weights_only=True))
@@ -211,5 +236,7 @@ else :
             with torch.inference_mode():
                 action = torch.argmax(q_network(state.to(device)))
                 state, reward, terminated, truncated, info = env.step(action)
+                env1.paint()
                 if terminated or truncated :
                     EKON(terminated, truncated)
+        env1.display()
