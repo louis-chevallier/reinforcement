@@ -128,11 +128,11 @@ class DQNetworkModel(nn.Module):
         return self.layers(x)
 
 
-device = "cpu"
+device = "cuda" if torch.cuda.is_available() else "cpu"
 EKON(env.observation_space.shape[0], env.action_space.n)
 q_network = DQNetworkModel(env.observation_space.shape[0], env.action_space.n).to(device)
 
-target_q_network = copy.deepcopy(q_network).to(device).eval()
+target_q_network = copy.deepcopy(q_network).to(device).eval().to(device)
 
 class ReplayMemory:
     def __init__(self, capacity=100000):
@@ -189,6 +189,9 @@ def dqn_training(
             
             if memory.can_sample(batch_size):
                 state_b, action_b, reward_b, truncated_b,terminated_b, next_state_b = memory.sample(batch_size) # sample a batch of experiences from the memory
+
+                state_b = state_b.to(device)
+                
                 qsa_b = q_network(state_b).gather(1, action_b) # get q-values for the batch of experiences
                 
                 next_qsa_b = target_q_network(next_state_b) # get q-values for the batch of next_states using the target network
