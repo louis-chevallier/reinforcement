@@ -14,7 +14,7 @@ import gymnasium as gym
 
 EKOX(gym.__version__)
 
-#tqdm = lambda x : x
+tqdm = lambda x : x
 
 parser = argparse.ArgumentParser(
     prog='DQLearning')
@@ -49,9 +49,11 @@ class CustomEnv(gym.Env) :
     def reset(self) :
         self.pp = np.ones((D,D,3))
         self.pp[:,:,0] = image
-        self.state = np.asarray((D//2, D//2))
+        self.state = np.asarray((D/2, D/2))
         self.s = 0
-        return [self.state]
+        r = self.state[None, ]
+        EKOX(r)
+        return r
 
     def display(self) :
         plt.imshow(self.pp); plt.show()
@@ -102,6 +104,9 @@ class PreProcessEnv(gym.Wrapper):
 
     def reset(self):
         obs = self.env.reset()
+        EKOX(obs)
+        EKOX(obs[0])
+        EKOX(torch.from_numpy(np.ones((2,1))))
         obs = torch.from_numpy(obs[0]).unsqueeze(0).float()
         return obs
     
