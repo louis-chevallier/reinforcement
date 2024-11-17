@@ -78,7 +78,7 @@ class CustomEnv(gym.Env) :
         truncated = self.s > D*2
         terminated = next_state[0] == 0 and next_state[1] == 0
 
-        terminated |= image[s[0], s[1]] == 0
+        terminated |= image[int(s[0]), int(s[1])] == 0
         terminated |= s[0] > D
         terminated |= s[0] < 0
         terminated |= s[1] > D
