@@ -14,7 +14,7 @@ import gymnasium as gym
 
 EKOX(gym.__version__)
 
-tqdm = lambda x : x
+#tqdm = lambda x : x
 
 parser = argparse.ArgumentParser(
     prog='DQLearning')
@@ -30,14 +30,8 @@ image = np.asarray(Image.open('bw.png'))
 EKOX(np.mean(image))
 EKOX(image.shape)
 
-CP = False
-    
-
-
+CP = True #False
 D, _ = image.shape
-
-
-
 
 ground = np.zeros((D, D))
 class CustomEnv(gym.Env) :
@@ -49,18 +43,19 @@ class CustomEnv(gym.Env) :
     def reset(self) :
         self.pp = np.ones((D,D,3))
         self.pp[:,:,0] = image
-        self.state = np.asarray((D/2, D/2))
+        self.state = np.asarray((D/2/D, D/2/D))
         self.s = 0
         r = self.state[None, ]
-        EKOX(r)
+        #EKOX(self.state)
         return r
 
     def display(self) :
         plt.imshow(self.pp); plt.show()
 
-    def paint(self) :
-        s = self.state        
-        self.pp[s[0], s[1], 1:] = (0.5, 0.5)
+    def paint(self, v) :
+        s = self.state
+        #EKON(v, s)
+        self.pp[int(s[0]), int(s[1]), 1:] = (v, v)
         
     def step(self, action) :
         self.s += 1
@@ -72,17 +67,20 @@ class CustomEnv(gym.Env) :
         }[int(action)]
         s = self.state
         #EKON(s, v)
-        next_state = np.asarray([s[0] + v[0], s[1] + v[1]])
+        next_state = np.asarray([s[0] + v[0]/D, s[1] + v[1]/D])
         self.state = next_state
-        reward = float(D - np.sqrt((s[0] ** 2 + s[1] **2)))
-        truncated = self.s > D*2
-        terminated = next_state[0] == 0 and next_state[1] == 0
-
-        terminated |= image[int(s[0]), int(s[1])] == 0
-        terminated |= s[0] > D
+        #EKOX(self.state)        
+        dist = np.sqrt((s[0] ** 2 + s[1] **2))
+        reward = float(1. / max(1/100, dist))
+        truncated = dist > 2
+        terminated = dist < 1/100
+        collide = image[int(s[0]*D), int(s[1]*D)] == 0
+        terminated |= collide
+        terminated |= s[0] > 1
         terminated |= s[0] < 0
-        terminated |= s[1] > D
+        terminated |= s[1] > 1
         terminated |= s[1] < 0
+        #EKON(terminated, truncated, reward, collide)
         #EKOX(image[s[0], s[1]])
         return next_state, reward, truncated, terminated, None
 
@@ -104,15 +102,14 @@ class PreProcessEnv(gym.Wrapper):
 
     def reset(self):
         obs = self.env.reset()
-        EKOX(obs)
-        EKOX(obs[0])
-        EKOX(torch.from_numpy(np.ones((2,1))))
         obs = torch.from_numpy(obs[0]).unsqueeze(0).float()
         return obs
     
-
+env_name = "CartPole-v1"
+env_name = "Acrobot-v1"
+    
 if CP :
-    env1 = gym.make("CartPole-v1")
+    env1 = gym.make(env_name)
 else :
     env1 = CustomEnv()    
 env = PreProcessEnv(env1)
@@ -127,6 +124,7 @@ class DQNetworkModel(nn.Module):
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.Linear(64, out_classes),
+#            nn.Sigmoid()
         )
 
     def forward(self, x):
@@ -160,7 +158,7 @@ class ReplayMemory:
         assert self.can_sample(batch_size)
         transitions = random.sample(self.memory, batch_size)
         batch = zip(*transitions)
-        return [torch.cat([item for item in items]) for items in batch]
+        return [torch.cat([item.to(device) for item in items]) for items in batch]
 
 def policy(state, epsilon):
     if torch.rand(1) < epsilon:
@@ -183,20 +181,20 @@ def dqn_training(
     stats = {'MSE Loss': [], 'Returns': []}
     
     for episode in tqdm(range(1, episodes + 1)):
-        state = env.reset()
+        state = env.reset().to(device)
         truncated, terminated = False, False # initiate the terminated and truncated flags
         ep_return = 0
+        #EKOX(state)        
         while not truncated and not terminated:
             action = policy(state, epsilon) # select action based on epsilon greedy policy
             next_state, reward, truncated, terminated, _ = env.step(action) # take step in environment
-            
+            next_state = next_state.to(device)
             memory.insert([state, action, reward, truncated,terminated, next_state]) #insert experience into memory
             
             if memory.can_sample(batch_size):
                 state_b, action_b, reward_b, truncated_b,terminated_b, next_state_b = memory.sample(batch_size) # sample a batch of experiences from the memory
 
-                state_b = state_b.to(device)
-                
+                #EKOX(state_b)
                 qsa_b = q_network(state_b).gather(1, action_b) # get q-values for the batch of experiences
                 
                 next_qsa_b = target_q_network(next_state_b) # get q-values for the batch of next_states using the target network
@@ -226,11 +224,16 @@ def dqn_training(
     return stats    
 
 if CP :
-    env = gym.make("CartPole-v1", render_mode = "human")
+
+    d = {
+        "Acrobot-v1" : "rgb_array",
+        "CartPole-v1" ; "human" }
+    
+    env = gym.make(env_name,  render_mode = None  if args.train else d[env_name])
     env = PreProcessEnv(env)
 
 if args.train :
-    d = dqn_training(q_network, policy, 100)
+    d = dqn_training(q_network, policy, 1000)
     EKOX(len(d["MSE Loss"]))
     #plt.plot(d["MSE Loss"]); plt.show()
     torch.save(q_network.state_dict(), 'qlearing.cpt')
@@ -239,12 +242,22 @@ else :
     q_network.eval()
     for i in range(20):
         state = env.reset()
+        n=0
         terminated, truncated = False, False
         while not terminated and not truncated:
             with torch.inference_mode():
                 action = torch.argmax(q_network(state.to(device)))
+                action_i = int(action.cpu().detach())
+                v = float(q_network(state.to(device))[0,action_i].cpu())
                 state, reward, terminated, truncated, info = env.step(action)
-                env1.paint()
+                try :
+                    env1.paint(v)
+                except :
+                    pass
                 if terminated or truncated :
-                    EKON(terminated, truncated)
-        env1.display()
+                    EKON(n, terminated, truncated)
+                n += 1
+        try :
+            env1.display()
+        except :
+            pass
