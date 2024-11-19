@@ -11,6 +11,7 @@ import numpy as np
 from argparse import Namespace
 from PIL import Image
 import gymnasium as gym
+from numba import jit
 
 EKOX(gym.__version__)
 
@@ -25,26 +26,70 @@ args = parser.parse_args()
 
 
 # Open the image form working directory
-image = np.asarray(Image.open('bw.png'))
+image = np.asarray(Image.open('bw.png')).copy()
+
+image[:,:] = 1
 
 EKOX(np.mean(image))
 EKOX(image.shape)
 
-CP = True #False
+CP = False
 D, _ = image.shape
 
 ground = np.zeros((D, D))
+
+aa = lambda x : np.asarray(x)
+d_action = np.asarray([
+    aa((0, 1)),
+    aa((1, 0)),
+    aa((-1, 0)),
+    aa((0, -1))])
+EKOX(d_action)
+
+@jit
+def xstep(action, s, count) :
+    v = d_action[int(action)]        
+    #EKON(s, v)
+    next_state = s + v / D
+    #self.state = next_state
+    #EKOX(self.state)        
+    dist = np.sqrt((s[0] ** 2 + s[1] **2))
+    #reward = float(1. / max(1/100, dist))
+    reward = 1 if dist < 1/100 else 0
+    truncated = dist > 2 or count > D*2
+    terminated = dist < 1/20
+    out_of_bounds = s[0] > 1 or s[0] < 0 or s[1] > 1 or s[1] < 0
+    terminated |= out_of_bounds
+    if not out_of_bounds :
+        collide = image[int(s[0]*D), int(s[1]*D)] == 0
+        terminated |= collide
+    #EKON(terminated, truncated, reward, collide)
+    #EKOX(image[s[0], s[1]])
+    return next_state, reward, int(truncated), int(terminated), None
+
+
+
 class CustomEnv(gym.Env) :
     def __init__(self) :
         self.observation_space = np.ones(shape=(2,1))
         EKOX(self.observation_space)
         self.action_space = Namespace(**{ "n" : 4})
-        self.s = 0
+        self.count = 0
     def reset(self) :
         self.pp = np.ones((D,D,3))
         self.pp[:,:,0] = image
-        self.state = np.asarray((D/2/D, D/2/D))
-        self.s = 0
+        while (True) :
+            DD = D/5
+            ee = np.random.randint(DD, size=(2)) - DD//2
+            self.state = np.asarray((D/2, D/2)) + ee
+            s = self.state
+            collide = image[int(s[0]), int(s[1])] == 0
+            if not collide :
+                break
+        #EKOX(self.state)            
+        self.state /= D
+
+        self.count = 0
         r = self.state[None, ]
         #EKOX(self.state)
         return r
@@ -54,35 +99,14 @@ class CustomEnv(gym.Env) :
 
     def paint(self, v) :
         s = self.state
-        #EKON(v, s)
-        self.pp[int(s[0]), int(s[1]), 1:] = (v, v)
-        
+        self.pp[int(s[0]*D), int(s[1]*D), 1:] = (v, v)
+
     def step(self, action) :
-        self.s += 1
-        v = {
-            0 : (1, 0),
-            1 : (0, 1),
-            2 : (-1, 0),
-            3 : (0, -1)
-        }[int(action)]
-        s = self.state
-        #EKON(s, v)
-        next_state = np.asarray([s[0] + v[0]/D, s[1] + v[1]/D])
+        self.count += 1
+        aaa = xstep(action, self.state, self.count)
+        next_state, reward, truncated, terminated, _ = aaa
         self.state = next_state
-        #EKOX(self.state)        
-        dist = np.sqrt((s[0] ** 2 + s[1] **2))
-        reward = float(1. / max(1/100, dist))
-        truncated = dist > 2
-        terminated = dist < 1/100
-        collide = image[int(s[0]*D), int(s[1]*D)] == 0
-        terminated |= collide
-        terminated |= s[0] > 1
-        terminated |= s[0] < 0
-        terminated |= s[1] > 1
-        terminated |= s[1] < 0
-        #EKON(terminated, truncated, reward, collide)
-        #EKOX(image[s[0], s[1]])
-        return next_state, reward, truncated, terminated, None
+        return aaa
 
 class PreProcessEnv(gym.Wrapper):
 
@@ -92,12 +116,15 @@ class PreProcessEnv(gym.Wrapper):
     def step(self, action):
         action = action.item()
         obs, reward, terminated, truncated, info = self.env.step(action)
-
         obs = torch.from_numpy(obs).unsqueeze(0).float()
         reward = torch.tensor(reward).view(-1, 1)
         terminated = torch.tensor(terminated).view(-1, 1)
         truncated = torch.tensor(truncated).view(-1, 1)
 
+        #pos, velo, angle, ang_velo = obs[0].detach().numpy()
+        #EKON(pos, velo, angle, ang_velo, float(reward), int(terminated), int(truncated))
+        #if reward < 1. : sys.exit(0)
+        
         return obs, reward, terminated, truncated, info
 
     def reset(self):
@@ -106,7 +133,7 @@ class PreProcessEnv(gym.Wrapper):
         return obs
     
 env_name = "CartPole-v1"
-env_name = "Acrobot-v1"
+#env_name = "Acrobot-v1"
     
 if CP :
     env1 = gym.make(env_name)
@@ -172,7 +199,7 @@ def dqn_training(
     policy,
     episodes,
     alpha=0.0001,
-    batch_size=32,
+    batch_size=64,
     gamma=0.99,
     epsilon=1,
 ):
@@ -227,7 +254,7 @@ if CP :
 
     d = {
         "Acrobot-v1" : "rgb_array",
-        "CartPole-v1" ; "human" }
+        "CartPole-v1" : "human" }
     
     env = gym.make(env_name,  render_mode = None  if args.train else d[env_name])
     env = PreProcessEnv(env)
@@ -249,10 +276,12 @@ else :
                 action = torch.argmax(q_network(state.to(device)))
                 action_i = int(action.cpu().detach())
                 v = float(q_network(state.to(device))[0,action_i].cpu())
+                v = 0.5
                 state, reward, terminated, truncated, info = env.step(action)
                 try :
                     env1.paint(v)
-                except :
+                except Exception as e :
+                    EKOX(e)
                     pass
                 if terminated or truncated :
                     EKON(n, terminated, truncated)

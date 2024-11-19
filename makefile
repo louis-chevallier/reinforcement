@@ -4,4 +4,4 @@ start :
 	python v0.py 
 
 install :
-	pip install "gymnasium[classic-control]"
+	pip install "gymnasium[classic-control]" torchrl
