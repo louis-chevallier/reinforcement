@@ -1,3 +1,4 @@
+import itertools
 import copy
 from utillc import *
 import torch
@@ -11,7 +12,9 @@ import numpy as np
 from argparse import Namespace
 from PIL import Image
 import gymnasium as gym
-
+from collections import defaultdict
+import networkx as nx
+import matplotlib.pyplot as plt
 EKOX(gym.__version__)
 
 #tqdm = lambda x : x
@@ -30,10 +33,87 @@ image = np.asarray(Image.open('bw.png'))
 EKOX(np.mean(image))
 EKOX(image.shape)
 
-CP = True #False
+CP = False
 D, _ = image.shape
 
 ground = np.zeros((D, D))
+
+
+T = lambda next_state, reward=0 : (next_state, reward)
+TERMINATED = -1
+G = [
+    { 0 : T(TERMINATED), 1 : T(1,1)},
+    { 0 : T(2), 1 : T(TERMINATED, 1) },
+    { 0 : T(3), 1 : T(4,1) },
+    { 0 : T(TERMINATED), 1 : T(TERMINATED, 1) },
+    { 0 : T(TERMINATED, 1), 1 : T(TERMINATED, 0) }
+]
+
+
+if False :
+    NG = nx.DiGraph()
+
+    #for i, nd in enumerate(G) :    NG.add_node(i)
+
+    el = {}
+    nl = {}
+    for i, nd in enumerate(G) :
+        if nd[0][0] >= 0 :
+            NG.add_edge(i, nd[0][0])
+            el[(i, nd[0][0])] = nd[0][1]
+        if nd[1][0] >= 0 :        
+            NG.add_edge(i, nd[1][0])
+            el[(i, nd[1][0])] = nd[1][1]        
+
+    nx.draw_networkx_labels(
+        NG,
+        pos=nx.spring_layout(NG))
+
+    nx.draw_networkx_edge_labels(
+        NG,
+        pos=nx.spring_layout(NG),
+        edge_labels=el,
+        font_color='red'
+    )
+    nx.draw(NG)
+    #nx.draw(NG, pos=nx.spring_layout(NG))  # use spring layout
+    limits = plt.axis("off")  # turn off axis
+    plt.show()
+
+
+class GraphEnv(gym.Env) :
+    def __init__(self) :
+        self.observation_space = np.ones(shape=(1,1))
+        EKOX(self.observation_space)
+        self.action_space = Namespace(**{ "n" : 2})
+        self.s = 0
+    def reset(self) :
+        self.state = np.zeros(1)
+        self.s = 0
+        r = self.state[None, ]
+        return r
+
+    def display(self) :
+        pass
+
+    def paint(self, v) :
+        pass
+        
+    def step(self, action) :
+        self.s += 1
+        _is = int(self.state[0])
+        sd = G[_is]
+        next_state = np.asarray([sd[action][0]])
+        #EKON(_is, sd, action, next_state)
+        self.state = next_state
+        reward = sd[action][1]
+        truncated = False
+        terminated = next_state == TERMINATED
+        return next_state, reward, truncated, terminated, None
+
+
+    
+
 class CustomEnv(gym.Env) :
     def __init__(self) :
         self.observation_space = np.ones(shape=(2,1))
@@ -111,7 +191,9 @@ env_name = "Acrobot-v1"
 if CP :
     env1 = gym.make(env_name)
 else :
-    env1 = CustomEnv()    
+    env1 = CustomEnv()
+    #env1 = GraphEnv()
+    
 env = PreProcessEnv(env1)
 
 class DQNetworkModel(nn.Module):
@@ -136,7 +218,7 @@ EKON(env.observation_space.shape[0], env.action_space.n)
 q_network = DQNetworkModel(env.observation_space.shape[0], env.action_space.n).to(device)
 
 target_q_network = copy.deepcopy(q_network).to(device).eval().to(device)
-
+EKO()
 class ReplayMemory:
     def __init__(self, capacity=100000):
         self.capacity = capacity
@@ -227,29 +309,46 @@ if CP :
 
     d = {
         "Acrobot-v1" : "rgb_array",
-        "CartPole-v1" ; "human" }
+        "CartPole-v1" : "human" }
     
     env = gym.make(env_name,  render_mode = None  if args.train else d[env_name])
     env = PreProcessEnv(env)
 
 if args.train :
-    d = dqn_training(q_network, policy, 1000)
+    d = dqn_training(q_network, policy, 500)
     EKOX(len(d["MSE Loss"]))
     #plt.plot(d["MSE Loss"]); plt.show()
-    torch.save(q_network.state_dict(), 'qlearing.cpt')
+    torch.save(q_network.state_dict(), 'qlearning.cpt')
+
+    bounds = [ (0, 1), (0, 1) ]
+    state = env.reset()
+    EKOX(state)
+    lb = [ np.linspace(mn, mx, 20) for i, (mn, mx) in enumerate(bounds)]
+    states = list(itertools.product(*lb))
+    EKOX(states)
+    for state in states :
+        state = torch.tensor(np.asarray(state)[None, ...]).float()
+        q = q_network(state.to(device)).detach().cpu().numpy()
+        EKON(state, q)
+
+
+    
 else : 
-    q_network.load_state_dict(torch.load('qlearing.cpt', weights_only=True))
+    q_network.load_state_dict(torch.load('qlearning.cpt', weights_only=True))
     q_network.eval()
     for i in range(20):
         state = env.reset()
+        #EKOX(state)
         n=0
         terminated, truncated = False, False
         while not terminated and not truncated:
             with torch.inference_mode():
                 action = torch.argmax(q_network(state.to(device)))
                 action_i = int(action.cpu().detach())
+                #EKOX(action_i)
                 v = float(q_network(state.to(device))[0,action_i].cpu())
                 state, reward, terminated, truncated, info = env.step(action)
+                #EKOX(state)
                 try :
                     env1.paint(v)
                 except :

@@ -5,3 +5,4 @@ start :
 
 install :
 	pip install "gymnasium[classic-control]"
+	mamba install --quiet -y networkx
