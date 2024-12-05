@@ -1,3 +1,4 @@
+import itertools
 import copy
 from utillc import *
 import torch
@@ -12,7 +13,10 @@ from argparse import Namespace
 from PIL import Image
 import gymnasium as gym
 from numba import jit
-
+from collections import defaultdict
+import networkx as nx
+import matplotlib.pyplot as plt
+import graphviz 
 EKOX(gym.__version__)
 
 #tqdm = lambda x : x
@@ -26,7 +30,9 @@ args = parser.parse_args()
 
 
 # Open the image form working directory
-image = np.asarray(Image.open('bw.png')).copy()
+image = np.asarray(Image.open('bw1.png')).copy()
+
+EKOX(image)
 
 image[:,:] = 1
 
@@ -34,34 +40,38 @@ EKOX(np.mean(image))
 EKOX(image.shape)
 
 CP = False
-D, _ = image.shape
+H,W = image.shape
 
-ground = np.zeros((D, D))
+ground = np.zeros((H,W))
+
 
 aa = lambda x : np.asarray(x)
+
 d_action = np.asarray([
-    aa((0, 1)),
-    aa((1, 0)),
-    aa((-1, 0)),
-    aa((0, -1))])
+    aa((0,1)),
+    aa((0,-1)),
+    aa((1,0)),
+    aa((-1,0))
+    ])
 EKOX(d_action)
 
-@jit
+
+#@jit
 def xstep(action, s, count) :
     v = d_action[int(action)]        
     #EKON(s, v)
-    next_state = s + v / D
+    next_state = s + v / W
     #self.state = next_state
     #EKOX(self.state)        
     dist = np.sqrt((s[0] ** 2 + s[1] **2))
     #reward = float(1. / max(1/100, dist))
-    reward = 1 if dist < 1/100 else 0
-    truncated = dist > 2 or count > D*2
-    terminated = dist < 1/20
+    reward = 1 if dist < 2/W else 0
+    truncated = dist > 2 or count > W*2
+    terminated = dist < 2/W
     out_of_bounds = s[0] > 1 or s[0] < 0 or s[1] > 1 or s[1] < 0
     terminated |= out_of_bounds
     if not out_of_bounds :
-        collide = image[int(s[0]*D), int(s[1]*D)] == 0
+        collide = image[int(s[0]*H), int(s[1]*W)] == 0
         terminated |= collide
     #EKON(terminated, truncated, reward, collide)
     #EKOX(image[s[0], s[1]])
@@ -69,25 +79,124 @@ def xstep(action, s, count) :
 
 
 
+T = lambda next_state, reward=0 : (next_state, reward)
+TERMINATED = -1
+G = [
+    { 0 : T(TERMINATED), 1 : T(1,1)},
+    { 0 : T(2), 1 : T(TERMINATED, 1) },
+    { 0 : T(3), 1 : T(4,1) },
+    { 0 : T(TERMINATED), 1 : T(TERMINATED, 1) },
+    { 0 : T(TERMINATED, 1), 1 : T(TERMINATED, 0) }
+]
+
+
+if False :
+    NG = nx.DiGraph()
+
+    #for i, nd in enumerate(G) :    NG.add_node(i)
+
+    el = {}
+    nl = {}
+    for i, nd in enumerate(G) :
+        if nd[0][0] >= 0 :
+            NG.add_edge(i, nd[0][0])
+            el[(i, nd[0][0])] = nd[0][1]
+        if nd[1][0] >= 0 :        
+            NG.add_edge(i, nd[1][0])
+            el[(i, nd[1][0])] = nd[1][1]        
+
+    nx.draw_networkx_labels(
+        NG,
+        pos=nx.spring_layout(NG))
+
+    nx.draw_networkx_edge_labels(
+        NG,
+        pos=nx.spring_layout(NG),
+        edge_labels=el,
+        font_color='red'
+    )
+    nx.draw(NG)
+    #nx.draw(NG, pos=nx.spring_layout(NG))  # use spring layout
+    limits = plt.axis("off")  # turn off axis
+    plt.show()
+
+
+class GraphEnv(gym.Env) :
+
+    def states_samples(self) :
+        return [ [e] for e in range(0,4)]
+
+    def __init__(self) :
+        self.observation_space = np.ones(shape=(1,1))
+        EKOX(self.observation_space)
+        self.action_space = Namespace(**{ "n" : 2})
+        self.s = 0
+
+
+        dot = graphviz.Digraph("gg")
+
+        for i, nd in enumerate(G) :
+            dot.node(str(i), str(i))
+            def e(x) :
+                if nd[x][0] >= 0 :        
+                    dot.edge(str(i), str(nd[x][0]), label="A_" + str(x))
+                else :
+                    dot.edge(str(i), "T", label="A_" + str(x))                    
+            e(0)
+            e(1)
+        EKOX(dot)
+        dot.render("graph.png", view=True)
+    def reset(self) :
+        self.state = np.zeros(1)
+        self.s = 0
+        r = self.state[None, ]
+        return r
+
+    def display(self) :
+        pass
+
+    def paint(self, v) :
+        pass
+        
+    def step(self, action) :
+        self.s += 1
+        _is = int(self.state[0])
+        sd = G[_is]
+        next_state = np.asarray([sd[action][0]])
+        #EKON(_is, sd, action, next_state)
+        self.state = next_state
+        reward = sd[action][1]
+        truncated = False
+        terminated = next_state == TERMINATED
+        return next_state, reward, truncated, terminated, None
+
+
 class CustomEnv(gym.Env) :
+
+    def states_samples(self) :
+        bounds = [ (0, 1), (0, 1) ]
+        lb = [ np.linspace(mn, mx, W) for i, (mn, mx) in enumerate(bounds)]
+        return list(itertools.product(*lb))        
+
     def __init__(self) :
         self.observation_space = np.ones(shape=(2,1))
         EKOX(self.observation_space)
         self.action_space = Namespace(**{ "n" : 4})
         self.count = 0
-    def reset(self) :
-        self.pp = np.ones((D,D,3))
+        self.pp = np.ones((H,W,3))
         self.pp[:,:,0] = image
+        
+    def reset(self) :
         while (True) :
-            DD = D/5
+            DD = W/5
             ee = np.random.randint(DD, size=(2)) - DD//2
-            self.state = np.asarray((D/2, D/2)) + ee
+            self.state = np.asarray((H/2, W/2)) + ee
             s = self.state
             collide = image[int(s[0]), int(s[1])] == 0
             if not collide :
                 break
         #EKOX(self.state)            
-        self.state /= D
+        self.state /= (H,W)
 
         self.count = 0
         r = self.state[None, ]
@@ -99,7 +208,7 @@ class CustomEnv(gym.Env) :
 
     def paint(self, v) :
         s = self.state
-        self.pp[int(s[0]*D), int(s[1]*D), 1:] = (v, v)
+        self.pp[int(s[0]*H), int(s[1]*W), 1:] = (v, v)
 
     def step(self, action) :
         self.count += 1
@@ -138,7 +247,9 @@ env_name = "CartPole-v1"
 if CP :
     env1 = gym.make(env_name)
 else :
-    env1 = CustomEnv()    
+    env1 = CustomEnv()
+    #env1 = GraphEnv()
+    
 env = PreProcessEnv(env1)
 
 class DQNetworkModel(nn.Module):
@@ -163,7 +274,7 @@ EKON(env.observation_space.shape[0], env.action_space.n)
 q_network = DQNetworkModel(env.observation_space.shape[0], env.action_space.n).to(device)
 
 target_q_network = copy.deepcopy(q_network).to(device).eval().to(device)
-
+EKO()
 class ReplayMemory:
     def __init__(self, capacity=100000):
         self.capacity = capacity
@@ -263,21 +374,42 @@ if args.train :
     d = dqn_training(q_network, policy, 1000)
     EKOX(len(d["MSE Loss"]))
     #plt.plot(d["MSE Loss"]); plt.show()
-    torch.save(q_network.state_dict(), 'qlearing.cpt')
+    torch.save(q_network.state_dict(), 'qlearning.cpt')
+
+    state = env.reset()
+    
+    states = env1.states_samples()
+    EKOX(states)
+    for state in states :
+        state = torch.tensor(np.asarray(state)[None, ...]).float()
+        q = q_network(state.to(device))
+        qq = q.detach().cpu().numpy()
+        EKON(state, q)
+        action = torch.argmax(q)
+        action_i = int(action.cpu().detach())
+        v = float(qq[0,action_i].cpu())
+        ss = state[0].cpu().detach().numpy()
+        EKOX(int(ss[0]*H))
+        EKOX(int(ss[1]*W))
+
+    
 else : 
-    q_network.load_state_dict(torch.load('qlearing.cpt', weights_only=True))
+    q_network.load_state_dict(torch.load('qlearning.cpt', weights_only=True))
     q_network.eval()
     for i in range(20):
         state = env.reset()
+        #EKOX(state)
         n=0
         terminated, truncated = False, False
         while not terminated and not truncated:
             with torch.inference_mode():
                 action = torch.argmax(q_network(state.to(device)))
                 action_i = int(action.cpu().detach())
+                #EKOX(action_i)
                 v = float(q_network(state.to(device))[0,action_i].cpu())
                 v = 0.5
                 state, reward, terminated, truncated, info = env.step(action)
+                #EKOX(state)
                 try :
                     env1.paint(v)
                 except Exception as e :
