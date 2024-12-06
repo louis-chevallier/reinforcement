@@ -1,3 +1,4 @@
+import os, sys
 import itertools
 import copy
 from utillc import *
@@ -16,7 +17,10 @@ from numba import jit
 from collections import defaultdict
 import networkx as nx
 import matplotlib.pyplot as plt
-import graphviz 
+import graphviz
+import pickle
+import markdown
+
 EKOX(gym.__version__)
 
 #tqdm = lambda x : x
@@ -24,8 +28,39 @@ EKOX(gym.__version__)
 parser = argparse.ArgumentParser(
     prog='DQLearning')
 
+
+def md(md_txt) :
+    fn = md_txt.split()[0]
+    rad = fn.split("-")[0]
+    html = markdown.markdown(md_txt, extensions=['md4mathjax'])
+    with open("out.html", "w", encoding="utf-8", errors="xmlcharrefreplace") as output_file:
+        output_file.write(html)
+    e = lambda command : os.system(command)
+    e("pandoc out.html -o out.pdf")
+    e("pdftoppm -f 1 -l 9999 out.pdf -png %s" % rad)
+    
+
+md("""
+xx-1.png
+# running
+suivi des courses, comparaison en temps réel de la perf
+$x = y²$
+## c1
+1. aaa
+2. bbb
+
+$$x = {-b \pm \sqrt{b^2-4ac} \over 2a}.$$
+
+""")
+
+
+
     
 parser.add_argument("--train", action="store_true", default=False)
+parser.add_argument("--load", action="store_true", default=False)
+parser.add_argument("--start_episodes", type=int, default=0)
+parser.add_argument("--episodes", type=int, default=10000)
+parser.add_argument("--eval", action="store_true", default=False)
 args = parser.parse_args()
 
 
@@ -34,10 +69,14 @@ image = np.asarray(Image.open('bw1.png')).copy()
 
 EKOX(image)
 
-image[:,:] = 1
+EKOI(image.astype(float))
+#image[:,:] = 1
 
 EKOX(np.mean(image))
 EKOX(image.shape)
+EKOX(image)
+
+BLOCK=1
 
 CP = False
 H,W = image.shape
@@ -65,13 +104,19 @@ def xstep(action, s, count) :
     #EKOX(self.state)        
     dist = np.sqrt((s[0] ** 2 + s[1] **2))
     #reward = float(1. / max(1/100, dist))
-    reward = 1 if dist < 2/W else 0
+    reward = 1 if dist < 2./W else 0
+    if dist < 2./W :
+        reward = 1 #+ 1. / count 
+    else :
+        reward = 0
+
+    
     truncated = dist > 2 or count > W*2
     terminated = dist < 2/W
     out_of_bounds = s[0] > 1 or s[0] < 0 or s[1] > 1 or s[1] < 0
     terminated |= out_of_bounds
     if not out_of_bounds :
-        collide = image[int(s[0]*H), int(s[1]*W)] == 0
+        collide = image[int(s[0]*H), int(s[1]*W)] == BLOCK
         terminated |= collide
     #EKON(terminated, truncated, reward, collide)
     #EKOX(image[s[0], s[1]])
@@ -185,14 +230,23 @@ class CustomEnv(gym.Env) :
         self.count = 0
         self.pp = np.ones((H,W,3))
         self.pp[:,:,0] = image
+        self.pp = np.ones((H,W,3))
+        self.pp[:,:,0] = image
+
+    def clear(self) :
+        self.pp = np.ones((H,W,3))
+        self.pp[:,:,0] = image
         
     def reset(self) :
+        
         while (True) :
-            DD = W/5
+            DD = W//2
             ee = np.random.randint(DD, size=(2)) - DD//2
+            #EKOX(ee)
             self.state = np.asarray((H/2, W/2)) + ee
             s = self.state
-            collide = image[int(s[0]), int(s[1])] == 0
+            #EKON(s, image[int(s[0]), int(s[1])])
+            collide = image[int(s[0]), int(s[1])] == BLOCK
             if not collide :
                 break
         #EKOX(self.state)            
@@ -208,7 +262,8 @@ class CustomEnv(gym.Env) :
 
     def paint(self, v) :
         s = self.state
-        self.pp[int(s[0]*H), int(s[1]*W), 1:] = (v, v)
+        y,x = min(int(s[0]*H), H-1), min(int(s[1]*W), W-1)
+        self.pp[y, x, 1:] = (v, v)
 
     def step(self, action) :
         self.count += 1
@@ -275,6 +330,13 @@ q_network = DQNetworkModel(env.observation_space.shape[0], env.action_space.n).t
 
 target_q_network = copy.deepcopy(q_network).to(device).eval().to(device)
 EKO()
+
+def epsilon_func(episode, total_episode) :
+    a, b = -1/total_episode, 1
+    ee = a * episode + b
+    res = max(0.1, ee)
+    return res
+
 class ReplayMemory:
     def __init__(self, capacity=100000):
         self.capacity = capacity
@@ -285,8 +347,6 @@ class ReplayMemory:
         if len(self.memory) < self.capacity:
             self.memory.append(None)
         self.memory[self.position] = transition
-
-        
         self.position = (self.position + 1) % self.capacity
 
     def can_sample(self, batch_size):
@@ -299,33 +359,47 @@ class ReplayMemory:
         return [torch.cat([item.to(device) for item in items]) for items in batch]
 
 def policy(state, epsilon):
-    if torch.rand(1) < epsilon:
-        return torch.randint(env.action_space.n, (1, 1))
+    rr = torch.rand(1)
+    #EKON(rr, epsilon, rr < epsilon)
+    if rr < epsilon:
+        # random : p = epsilon
+        res = torch.randint(env.action_space.n, (1, 1))
     else:
+        # greedy : p = 1-epsilon
         av = q_network(state).detach()
-        return torch.argmax(av, dim=-1, keepdim=True)
+        res = torch.argmax(av, dim=-1, keepdim=True)
+    return res
 
 def dqn_training(
-    q_network: DQNetworkModel,
-    policy,
-    episodes,
-    alpha=0.0001,
-    batch_size=64,
-    gamma=0.99,
-    epsilon=1,
+        cb,
+        q_network: DQNetworkModel,
+        policy,
+        episodes,
+        alpha=0.0001,
+        batch_size=64,
+        gamma=0.99,
+        start_episodes = 0
 ):
     optim = torch.optim.AdamW(q_network.parameters(), lr=alpha)
     memory = ReplayMemory()
     stats = {'MSE Loss': [], 'Returns': []}
-    
-    for episode in tqdm(range(1, episodes + 1)):
+    EKO()
+    e10 = episodes//10
+    for episode in tqdm(range(start_episodes, episodes + 1 + start_episodes)):
+        #EKON(episode , epsilon_func(episode, episodes))
+        if episode % e10 == 0 :
+            EKO()
+            cb(episode)
+
+        #EKO()
         state = env.reset().to(device)
         truncated, terminated = False, False # initiate the terminated and truncated flags
         ep_return = 0
         #EKOX(state)        
         while not truncated and not terminated:
-            action = policy(state, epsilon) # select action based on epsilon greedy policy
+            action = policy(state, epsilon_func(episode, episodes)) # select action based on epsilon greedy policy
             next_state, reward, truncated, terminated, _ = env.step(action) # take step in environment
+            #EKON(state.detach().cpu().numpy(), terminated.item(), truncated.item(), action.item())
             next_state = next_state.to(device)
             memory.insert([state, action, reward, truncated,terminated, next_state]) #insert experience into memory
             
@@ -354,11 +428,11 @@ def dqn_training(
         
         stats['Returns'].append(ep_return)
 
-        epsilon = max(0, epsilon - 1/10000)
-        
+        #epsilon = max(0, epsilon - 1/10000)
+        #EKOX(epsilon)
         if episode % 10 == 0:
             target_q_network.load_state_dict(q_network.state_dict())
-
+    EKO()
     return stats    
 
 if CP :
@@ -370,53 +444,71 @@ if CP :
     env = gym.make(env_name,  render_mode = None  if args.train else d[env_name])
     env = PreProcessEnv(env)
 
-if args.train :
-    d = dqn_training(q_network, policy, 1000)
-    EKOX(len(d["MSE Loss"]))
-    #plt.plot(d["MSE Loss"]); plt.show()
-    torch.save(q_network.state_dict(), 'qlearning.cpt')
 
-    state = env.reset()
-    
-    states = env1.states_samples()
-    EKOX(states)
-    for state in states :
-        state = torch.tensor(np.asarray(state)[None, ...]).float()
-        q = q_network(state.to(device))
-        qq = q.detach().cpu().numpy()
-        EKON(state, q)
-        action = torch.argmax(q)
-        action_i = int(action.cpu().detach())
-        v = float(qq[0,action_i].cpu())
-        ss = state[0].cpu().detach().numpy()
-        EKOX(int(ss[0]*H))
-        EKOX(int(ss[1]*W))
 
-    
-else : 
+if args.load :
     q_network.load_state_dict(torch.load('qlearning.cpt', weights_only=True))
+    
+if args.train :
+    EKO()
+    def cb(num) :
+        states = env1.states_samples()
+        #EKOX(states)
+        rr = np.zeros((H,W))    
+        for state in states :
+            state = torch.tensor(np.asarray(state)[None, ...]).float()
+            q = q_network(state.to(device))
+            qq = q.detach().cpu().numpy()
+            #EKON(state, q)
+            action = torch.argmax(q)
+            action_i = int(action.cpu().detach())
+            v = float(qq[0,action_i])
+            ss = state[0].cpu().detach().numpy()
+            vv = lambda xx : min(xx, W-1)
+            #EKON(vv(int(ss[0]*H)), vv(int(ss[1]*W)), v)
+            rr[vv(int(ss[0]*H)), vv(int(ss[1]*W))] = v
+        #EKOX(rr)
+        rr = np.where(image == 1, 0, rr)
+        EKOI(rr)
+        plt.imsave("f_%06d.png" % num, rr);# plt.show()
+    EKO()
+    d = dqn_training(cb, q_network, policy, args.episodes, start_episodes=args.start_episodes)
+    EKOX(len(d["MSE Loss"]))
+    with open("loss.pickle","wb") as fd :
+        pickle.dump(d["MSE Loss"], fd)
+    #plt.imsave("loss.png", d["MSE Loss"]); 
+    #plt.plot(d["MSE Loss"]); plt.show()
+    #plt.imsave("f_%04d.png" % num, rr);# plt.show()
+    
+    torch.save(q_network.state_dict(), 'qlearning.cpt')
+    state = env.reset()
+
+if args.eval : 
     q_network.eval()
     for i in range(20):
         state = env.reset()
+        env1.clear()
         #EKOX(state)
         n=0
         terminated, truncated = False, False
         while not terminated and not truncated:
             with torch.inference_mode():
-                action = torch.argmax(q_network(state.to(device)))
+                action = torch.argmax(q_network(state.to(device)), dim=-1, keepdim=True)
                 action_i = int(action.cpu().detach())
-                #EKOX(action_i)
+                EKON(action, action_i)
                 v = float(q_network(state.to(device))[0,action_i].cpu())
                 v = 0.5
                 state, reward, terminated, truncated, info = env.step(action)
-                #EKOX(state)
-                try :
-                    env1.paint(v)
-                except Exception as e :
-                    EKOX(e)
-                    pass
+                EKON(state.detach().cpu().numpy(), terminated.item(), truncated.item(), action_i)
                 if terminated or truncated :
                     EKON(n, terminated, truncated)
+                else :
+                    try :
+                        env1.paint(v)
+                    except Exception as e :
+                        EKOX(e)
+                        pass
+
                 n += 1
         try :
             env1.display()
